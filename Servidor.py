@@ -60,5 +60,5 @@ def iniciar_servidor():
         cliente_thread = threading.Thread(target=processar_cliente, args=(conexao, endereco))
         cliente_thread.start()
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     iniciar_servidor()

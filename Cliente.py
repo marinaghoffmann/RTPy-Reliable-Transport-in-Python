@@ -54,5 +54,5 @@ def iniciar_cliente():
         else:
             print("[!] Opção inválida. Encerrando cliente.")
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     iniciar_cliente()
