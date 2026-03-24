@@ -46,6 +46,8 @@ Assim que a conexão é estabelecida:
 ### ▶️ Passo 1: Iniciar o Servidor
 ```bash
 python servidor.py
+```
+
 ### ▶️ Passo 2: Iniciar o Cliente
 Em outro terminal, execute:
 
