@@ -46,3 +46,40 @@ Assim que a conexão é estabelecida:
 ### ▶️ Passo 1: Iniciar o Servidor
 ```bash
 python servidor.py
+### ▶️ Passo 2: Iniciar o Cliente
+Em outro terminal, execute:
+
+```bash
+python cliente.py
+```
+
+### ▶️ Passo 3: Escolher o modo de operação
+Ao iniciar, o cliente solicitará que você escolha o modo de envio:
+
+- `1` → **Modo Único** (envia uma mensagem por vez)
+- `2` → **Modo Rajada** (envia múltiplas mensagens em sequência)
+
+### ▶️ Passo 4: Enviar mensagens
+- Digite a mensagem que deseja enviar
+- O cliente calculará o **checksum (MD5)** automaticamente
+- O servidor responderá com:
+  - `ACK` → mensagem recebida corretamente
+  - `NACK` → erro na integridade ou formato
+
+---
+
+## 🧪 Testando a Simulação de Erro
+No modo **rajada**, o cliente pode enviar propositalmente um pacote com erro:
+
+- Isso simula corrupção de dados
+- O servidor deverá responder com `NACK`
+
+---
+
+## 📂 Estrutura do Projeto
+```
+.
+├── servidor.py
+├── cliente.py
+└── README.md
+```
