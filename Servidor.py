@@ -5,7 +5,11 @@ import hashlib
 HOST = 'localhost'
 PORT = 12345
 WINDOW_SIZE = 5
-TAMANHO_MAXIMO = 1024
+
+MODOS = {
+    '1': 'Go-Back-N',
+    '2': 'Repetição Seletiva',
+}
 
 def calcular_checksum(mensagem):
     return hashlib.md5(mensagem.encode()).hexdigest()
@@ -13,10 +17,12 @@ def calcular_checksum(mensagem):
 def processar_cliente(conexao, endereco):
     print(f"[+] Conexão estabelecida com {endereco}")
 
-    conexao.send(str(TAMANHO_MAXIMO).encode())
+    tamanho_maximo = int(conexao.recv(1024).decode())
+    print(f"[*] Tamanho máximo da mensagem definido pelo cliente: {tamanho_maximo} caracteres")
 
     modo_operacao = conexao.recv(1024).decode()
-    print(f"[*] Handshake concluído! Modo de operação do cliente: {modo_operacao}")
+    nome_modo = MODOS.get(modo_operacao, f"Desconhecido ({modo_operacao})")
+    print(f"[*] Handshake concluído! Modo de operação: {nome_modo}")
 
     while True:
         try:

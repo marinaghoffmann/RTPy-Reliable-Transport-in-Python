@@ -9,10 +9,10 @@ Este projeto consiste na implementação de uma aplicação Cliente-Servidor uti
 
 ### 🔹 Handshake Inicial
 Assim que a conexão é estabelecida:
-- O **Servidor** informa ao **Cliente** o tamanho máximo permitido para as mensagens (**1024 bytes**).
+- O **Cliente** define e informa ao **Servidor** o tamanho máximo permitido para as mensagens (em **caracteres**, escolhido pelo usuário).
 - O **Cliente** informa o modo de operação escolhido:
-  - **Único**
-  - **Rajada**
+  - **Go-Back-N**
+  - **Repetição Seletiva**
 
 ---
 
@@ -32,7 +32,7 @@ Assim que a conexão é estabelecida:
 ---
 
 ### 🔹 Simulação de Corrupção
-- O **Cliente**, no modo **rajada**, possui uma função para:
+- O **Cliente**, no modo **Repetição Seletiva**, possui uma função para:
   - Forçar o envio de um pacote com checksum incorreto
 - Isso permite testar a resposta do servidor (**NACK**)
 
@@ -45,23 +45,30 @@ Assim que a conexão é estabelecida:
 
 ### ▶️ Passo 1: Iniciar o Servidor
 ```bash
-python servidor.py
+python3 Servidor.py
 ```
 
 ### ▶️ Passo 2: Iniciar o Cliente
 Em outro terminal, execute:
 
 ```bash
-python cliente.py
+python3 Cliente.py
 ```
 
-### ▶️ Passo 3: Escolher o modo de operação
-Ao iniciar, o cliente solicitará que você escolha o modo de envio:
+### ▶️ Passo 3: Definir o tamanho máximo da mensagem
+O cliente solicitará que você informe o tamanho máximo permitido para as mensagens, **em caracteres**:
 
-- `1` → **Modo Único** (envia uma mensagem por vez)
-- `2` → **Modo Rajada** (envia múltiplas mensagens em sequência)
+```
+Digite o tamanho máximo da mensagem em caracteres: 20
+```
 
-### ▶️ Passo 4: Enviar mensagens
+### ▶️ Passo 4: Escolher o modo de operação
+Em seguida, escolha o modo de envio:
+
+- `1` → **Go-Back-N** (envia uma mensagem por vez)
+- `2` → **Repetição Seletiva** (envia múltiplos pacotes em sequência)
+
+### ▶️ Passo 5: Enviar mensagens
 - Digite a mensagem que deseja enviar
 - O cliente calculará o **checksum (MD5)** automaticamente
 - O servidor responderá com:
@@ -71,7 +78,7 @@ Ao iniciar, o cliente solicitará que você escolha o modo de envio:
 ---
 
 ## 🧪 Testando a Simulação de Erro
-No modo **rajada**, o cliente pode enviar propositalmente um pacote com erro:
+No modo **Repetição Seletiva**, o cliente pode enviar propositalmente um pacote com erro:
 
 - Isso simula corrupção de dados
 - O servidor deverá responder com `NACK`
@@ -81,7 +88,7 @@ No modo **rajada**, o cliente pode enviar propositalmente um pacote com erro:
 ## 📂 Estrutura do Projeto
 ```
 .
-├── servidor.py
-├── cliente.py
+├── Servidor.py
+├── Cliente.py
 └── README.md
 ```

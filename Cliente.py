@@ -19,22 +19,28 @@ def iniciar_cliente():
         socket_cliente.connect((HOST, PORT))
         print("[*] Conectado ao servidor.")
 
-        tamanho_max_msg = int(socket_cliente.recv(1024).decode())
-        print(f"[*] Tamanho máximo da mensagem: {tamanho_max_msg} bytes")
+        tamanho_max_msg = int(input("Digite o tamanho máximo da mensagem em caracteres: ").strip())
+        socket_cliente.send(str(tamanho_max_msg).encode())
+        print(f"[*] Tamanho máximo da mensagem definido: {tamanho_max_msg} caracteres")
 
-        modo_envio = input("Escolha o modo de envio (1 - Único, 2 - Rajada): ").strip()
+        print("\nEscolha o modo de envio:")
+        print("  1 - Go-Back-N")
+        print("  2 - Repetição Seletiva")
+        modo_envio = input("Opção: ").strip()
         socket_cliente.send(modo_envio.encode())
 
         if modo_envio == '1':
+            print("\n[*] Modo: Go-Back-N")
             mensagem = input("Digite a mensagem a ser enviada: ").strip()
-            if len(mensagem.encode()) > tamanho_max_msg:
-                print("[!] Erro: mensagem excede o tamanho máximo permitido.")
+            if len(mensagem) > tamanho_max_msg:
+                print(f"[!] Erro: mensagem excede o tamanho máximo permitido ({tamanho_max_msg} caracteres).")
                 return
             enviar_pacote(socket_cliente, 1, mensagem)
             resposta = socket_cliente.recv(1024).decode()
             print(f"[Servidor] {resposta}")
 
         elif modo_envio == '2':
+            print("\n[*] Modo: Repetição Seletiva")
             total_pacotes = int(input("Quantos pacotes deseja enviar em rajada? ").strip())
             corromper_pacote = input("Deseja corromper algum pacote? (s/n): ").strip().lower() == 's'
             pacote_corrompido = int(input(f"Qual número do pacote deseja corromper (1-{total_pacotes})? ").strip()) if corromper_pacote else -1
@@ -43,8 +49,8 @@ def iniciar_cliente():
                 mensagem = f"Pacote {i}"
                 corromper = (i == pacote_corrompido)
 
-                if len(mensagem.encode()) > tamanho_max_msg:
-                    print(f"[!] Erro: o pacote {i} excede o tamanho permitido ({tamanho_max_msg} bytes).")
+                if len(mensagem) > tamanho_max_msg:
+                    print(f"[!] Erro: o pacote {i} excede o tamanho permitido ({tamanho_max_msg} caracteres).")
                     continue
 
                 enviar_pacote(socket_cliente, i, mensagem, corromper)
