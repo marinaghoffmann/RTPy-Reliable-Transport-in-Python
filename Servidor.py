@@ -11,8 +11,19 @@ MODOS = {
     '2': 'Repetição Seletiva',
 }
 
-def calcular_checksum(mensagem):
-    return hashlib.md5(mensagem.encode()).hexdigest()
+def calcular_checksum(mensagem: str) -> str:
+    dados = mensagem.encode()
+    if len(dados) % 2 != 0:
+        dados += b'\x00'
+
+    soma = 0
+    for i in range(0, len(dados), 2):
+        palavra = (dados[i] << 8) + dados[i + 1]
+        soma += palavra
+        soma = (soma & 0xFFFF) + (soma >> 16) 
+
+    checksum = ~soma & 0xFFFF
+    return format(checksum, '04x')
 
 def processar_cliente(conexao, endereco):
     print(f"[+] Conexão estabelecida com {endereco}")
