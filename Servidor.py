@@ -1,5 +1,4 @@
 import socket
-import threading
 
 HOST = 'localhost'
 PORT = 12345
@@ -24,7 +23,7 @@ def calcular_checksum(mensagem: str) -> str:
     return format(checksum, '04x')
 
 
-def processar_pacote(conexao, dados, modo_operacao):
+def processar_pacote(conexao, dados):
 
     partes = dados.split('|', 2)
 
@@ -48,44 +47,10 @@ def processar_pacote(conexao, dados, modo_operacao):
         print(f"  [!] Erro de integridade no pacote {sequencia}. Enviando NACK.")
         conexao.send(f"NACK|{sequencia}".encode())
     else:
-
         print(f"  [✓] Pacote {sequencia} recebido corretamente: '{mensagem}'")
         conexao.send(f"ACK|{sequencia}".encode())
 
     return True
-
-
-def processar_cliente(conexao, endereco):
-    print(f"\n[+] Conexão estabelecida com {endereco}")
-
-    tamanho_maximo = int(conexao.recv(1024).decode())
-    print(f"[*] Tamanho máximo da mensagem: {tamanho_maximo} caracteres")
-
-    modo_operacao = conexao.recv(1024).decode()
-    nome_modo = MODOS.get(modo_operacao, f"Desconhecido ({modo_operacao})")
-    print(f"[*] Handshake concluído! Modo: {nome_modo}")
-    print(f"[*] Canal confiável ativo — sem simulação de erros ou perdas.\n")
-
-
-    while True:
-        try:
-            dados = conexao.recv(1024).decode()
-            if not dados:
-                break
-
-            continuar = processar_pacote(conexao, dados, modo_operacao)
-            if not continuar:
-                break
-
-        except ConnectionResetError:
-            print(f"[!] Conexão com {endereco} encerrada abruptamente.")
-            break
-        except Exception as e:
-            print(f"[!] Erro inesperado com {endereco}: {e}")
-            break
-
-    conexao.close()
-    print(f"\n[-] Conexão encerrada com {endereco}")
 
 
 def iniciar_servidor():
@@ -97,9 +62,37 @@ def iniciar_servidor():
 
     while True:
         conexao, endereco = servidor.accept()
-        thread = threading.Thread(target=processar_cliente, args=(conexao, endereco))
-        thread.daemon = True
-        thread.start()
+
+        print(f"\n[+] Conexão estabelecida com {endereco}")
+
+        tamanho_maximo = int(conexao.recv(1024).decode())
+        print(f"[*] Tamanho máximo da mensagem: {tamanho_maximo} caracteres")
+
+        modo_operacao = conexao.recv(1024).decode()
+        nome_modo = MODOS.get(modo_operacao, f"Desconhecido ({modo_operacao})")
+        print(f"[*] Handshake concluído! Modo: {nome_modo}")
+        print(f"[*] Canal confiável ativo — sem simulação de erros ou perdas.\n")
+
+        while True:
+            try:
+                dados = conexao.recv(1024).decode()
+                if not dados:
+                    break
+
+                continuar = processar_pacote(conexao, dados)
+                if not continuar:
+                    break
+
+            except ConnectionResetError:
+                print(f"[!] Conexão com {endereco} encerrada abruptamente.")
+                break
+            except Exception as e:
+                print(f"[!] Erro inesperado com {endereco}: {e}")
+                break
+
+        conexao.close()
+        print(f"\n[-] Conexão encerrada com {endereco}")
+        print("[*] Aguardando próxima conexão...\n")
 
 
 if __name__ == "__main__":
