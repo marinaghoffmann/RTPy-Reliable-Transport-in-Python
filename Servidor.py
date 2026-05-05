@@ -8,6 +8,7 @@ MODOS = {
     '2': 'Repetição Seletiva',
 }
 
+
 def calcular_checksum(mensagem: str) -> str:
     dados = mensagem.encode()
     if len(dados) % 2 != 0:
@@ -23,14 +24,13 @@ def calcular_checksum(mensagem: str) -> str:
     return format(checksum, '04x')
 
 
-def processar_pacote(conexao, dados):
-
+def processar_pacote(conexao, dados, fragmentos_recebidos):
     partes = dados.split('|', 2)
 
     if len(partes) != 3:
         print("[!] Pacote malformado recebido. Ignorando.")
         conexao.send("NACK|MALFORMADO".encode())
-        return True
+        return True, False
 
     sequencia_str, checksum_recebido, mensagem = partes
 
@@ -39,18 +39,23 @@ def processar_pacote(conexao, dados):
     except ValueError:
         print(f"[!] Número de sequência inválido: '{sequencia_str}'. Ignorando.")
         conexao.send("NACK|SEQ_INV".encode())
-        return True
+        return True, False
 
     checksum_calculado = calcular_checksum(mensagem)
-
     if checksum_recebido != checksum_calculado:
         print(f"  [!] Erro de integridade no pacote {sequencia}. Enviando NACK.")
         conexao.send(f"NACK|{sequencia}".encode())
-    else:
-        print(f"  [✓] Pacote {sequencia} recebido corretamente: '{mensagem}'")
-        conexao.send(f"ACK|{sequencia}".encode())
+        return True, False
 
-    return True
+    if mensagem == "END":
+        print(f"\n  [✓] Pacote de fim recebido (seq={sequencia}).")
+        conexao.send(f"ACK|{sequencia}".encode())
+        return True, True
+
+    print(f"  [✓] Pacote {sequencia} | checksum: {checksum_recebido} | conteúdo: '{mensagem}'")
+    fragmentos_recebidos[sequencia] = mensagem
+    conexao.send(f"ACK|{sequencia}".encode())
+    return True, False
 
 
 def iniciar_servidor():
@@ -62,7 +67,6 @@ def iniciar_servidor():
 
     while True:
         conexao, endereco = servidor.accept()
-
         print(f"\n[+] Conexão estabelecida com {endereco}")
 
         tamanho_maximo = int(conexao.recv(1024).decode())
@@ -70,8 +74,9 @@ def iniciar_servidor():
 
         modo_operacao = conexao.recv(1024).decode()
         nome_modo = MODOS.get(modo_operacao, f"Desconhecido ({modo_operacao})")
-        print(f"[*] Handshake concluído! Modo: {nome_modo}")
-        print(f"[*] Canal confiável ativo — sem simulação de erros ou perdas.\n")
+        print(f"[*] Handshake concluído! Modo: {nome_modo}\n")
+
+        fragmentos_recebidos = {}
 
         while True:
             try:
@@ -79,7 +84,15 @@ def iniciar_servidor():
                 if not dados:
                     break
 
-                continuar = processar_pacote(conexao, dados)
+                continuar, fim = processar_pacote(conexao, dados, fragmentos_recebidos)
+
+                if fim:
+                    mensagem_completa = ''.join(
+                        fragmentos_recebidos[k] for k in sorted(fragmentos_recebidos)
+                    )
+                    print(f"\n[✓] Mensagem completa recebida: '{mensagem_completa}'")
+                    fragmentos_recebidos = {}
+
                 if not continuar:
                     break
 
