@@ -94,12 +94,30 @@ def enviar_fim_com_retransmissao(socket_cliente, sequencia):
     return False
 
 
-def enviar_com_janela(socket_cliente, fragmentos, tamanho_janela, tipo_falha=None, pacote_falha=None):
-    """
-    Envia fragmentos em janelas deslizantes.
-    tipo_falha: 'erro' (checksum corrompido) ou 'perda' (pacote não enviado)
-    pacote_falha: número de sequência do pacote a falhar (1-based)
-    """
+def coletar_acks_janela(socket_cliente, janela_atual, pacotes_enviados):
+    respostas = {}
+    for i, idx in enumerate(janela_atual):
+        if not pacotes_enviados[i]:
+            continue 
+        socket_cliente.settimeout(TIMEOUT)
+        try:
+            resposta = receber_linha(socket_cliente)
+            print(f"  [SERVIDOR] {resposta}")
+            partes = resposta.split('|')
+            if len(partes) == 2:
+                tipo, seq_str = partes
+                try:
+                    respostas[int(seq_str)] = tipo
+                except ValueError:
+                    pass
+        except socket.timeout:
+            print(f"  [TIMEOUT] Sem resposta para pacote {idx+1}.")
+        finally:
+            socket_cliente.settimeout(None)
+    return respostas
+
+
+def enviar_janela_go_back_n(socket_cliente, fragmentos, tamanho_janela, tipo_falha=None, pacote_falha=None):
     total = len(fragmentos)
     base = 0
 
@@ -114,7 +132,6 @@ def enviar_com_janela(socket_cliente, fragmentos, tamanho_janela, tipo_falha=Non
             seq = idx + 1
             corromper = (tipo_falha == 'erro' and seq == pacote_falha)
             perder = (tipo_falha == 'perda' and seq == pacote_falha)
-
             if perder:
                 print(f"  [PERDA SIMULADA] Pacote {seq} não enviado (simulando perda no canal).")
                 pacotes_enviados.append(False)
@@ -122,37 +139,67 @@ def enviar_com_janela(socket_cliente, fragmentos, tamanho_janela, tipo_falha=Non
                 enviar_pacote(socket_cliente, seq, fragmentos[idx], corromper=corromper)
                 pacotes_enviados.append(True)
 
-        # Coleta ACKs apenas dos pacotes que foram enviados
-        respostas = {}
-        for i, idx in enumerate(janela_atual):
-            if not pacotes_enviados[i]:
-                continue  # pacote perdido — não vai ter resposta, detectado pelo timeout
-            socket_cliente.settimeout(TIMEOUT)
-            try:
-                resposta = receber_linha(socket_cliente)
-                print(f"  [SERVIDOR] {resposta}")
-                partes = resposta.split('|')
-                if len(partes) == 2:
-                    tipo, seq_str = partes
-                    try:
-                        respostas[int(seq_str)] = tipo
-                    except ValueError:
-                        pass
-            except socket.timeout:
-                print(f"  [TIMEOUT] Sem resposta para pacote {idx+1}.")
-            finally:
-                socket_cliente.settimeout(None)
+        respostas = coletar_acks_janela(socket_cliente, janela_atual, pacotes_enviados)
 
-        # Processa resultados — retransmite NACKs, timeouts e perdas
+        falha_idx = None
+        for idx in janela_atual:
+            seq = idx + 1
+            tipo = respostas.get(seq)
+            if tipo != 'ACK':
+                falha_idx = idx
+                if tipo == 'NACK':
+                    print(f"  [NACK] Pacote {seq} rejeitado.")
+                else:
+                    print(f"  [TIMEOUT] Pacote {seq} sem resposta.")
+                break
+
+        if falha_idx is not None:
+            retransmitir = list(range(falha_idx, fim_janela))
+            print(f"  [GO-BACK-N] Retransmitindo pacotes {falha_idx+1} a {fim_janela}...")
+            for idx in retransmitir:
+                seq = idx + 1
+                if not enviar_com_retransmissao(socket_cliente, seq, fragmentos[idx]):
+                    print(f"  [ABORTANDO] Não foi possível confirmar pacote {seq}.")
+                    return False
+
+        base = fim_janela
+
+    return True
+
+
+def enviar_janela_repeticao_seletiva(socket_cliente, fragmentos, tamanho_janela, tipo_falha=None, pacote_falha=None):
+    total = len(fragmentos)
+    base = 0
+
+    while base < total:
+        fim_janela = min(base + tamanho_janela, total)
+        janela_atual = list(range(base, fim_janela))
+
+        print(f"\n  [JANELA] Enviando pacotes {base+1} a {fim_janela} (janela={tamanho_janela})")
+
+        pacotes_enviados = []
+        for idx in janela_atual:
+            seq = idx + 1
+            corromper = (tipo_falha == 'erro' and seq == pacote_falha)
+            perder = (tipo_falha == 'perda' and seq == pacote_falha)
+            if perder:
+                print(f"  [PERDA SIMULADA] Pacote {seq} não enviado (simulando perda no canal).")
+                pacotes_enviados.append(False)
+            else:
+                enviar_pacote(socket_cliente, seq, fragmentos[idx], corromper=corromper)
+                pacotes_enviados.append(True)
+
+        respostas = coletar_acks_janela(socket_cliente, janela_atual, pacotes_enviados)
+
         for idx in janela_atual:
             seq = idx + 1
             tipo = respostas.get(seq)
             if tipo == 'ACK':
                 continue
             elif tipo == 'NACK':
-                print(f"  [NACK] Pacote {seq} rejeitado. Retransmitindo sem erro...")
+                print(f"  [NACK] Pacote {seq} rejeitado. Retransmitindo apenas este...")
             else:
-                print(f"  [TIMEOUT] Pacote {seq} sem resposta. Retransmitindo...")
+                print(f"  [TIMEOUT] Pacote {seq} sem resposta. Retransmitindo apenas este...")
             if not enviar_com_retransmissao(socket_cliente, seq, fragmentos[idx]):
                 print(f"  [ABORTANDO] Não foi possível confirmar pacote {seq}.")
                 return False
@@ -174,7 +221,6 @@ def negociar_janela(socket_cliente):
 
 
 def perguntar_simulacao(total_fragmentos):
-    """Pergunta ao usuário se quer simular erro ou perda e em qual pacote."""
     print(f"\n[*] A mensagem será enviada em {total_fragmentos} pacote(s).")
     print("Deseja simular algum problema?")
     print("  1 - Erro de integridade (checksum corrompido)")
@@ -218,7 +264,7 @@ def modo_go_back_n(socket_cliente, tamanho_max_msg, tamanho_janela):
 
     print(f"\n[*] Mensagem fragmentada em {len(fragmentos)} pacote(s) de até 4 caracteres.")
 
-    if not enviar_com_janela(socket_cliente, fragmentos, tamanho_janela, tipo_falha, pacote_falha):
+    if not enviar_janela_go_back_n(socket_cliente, fragmentos, tamanho_janela, tipo_falha, pacote_falha):
         print("\n[✗] Transmissão falhou.")
         return
 
@@ -249,7 +295,7 @@ def modo_repeticao_seletiva(socket_cliente, tamanho_max_msg, tamanho_janela):
 
     print(f"\n[*] Mensagem fragmentada em {len(fragmentos)} pacote(s) de até 4 caracteres.")
 
-    if not enviar_com_janela(socket_cliente, fragmentos, tamanho_janela, tipo_falha, pacote_falha):
+    if not enviar_janela_repeticao_seletiva(socket_cliente, fragmentos, tamanho_janela, tipo_falha, pacote_falha):
         print("\n[✗] Transmissão falhou.")
         return
 
