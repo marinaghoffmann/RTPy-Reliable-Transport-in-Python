@@ -1,109 +1,113 @@
 import socket
+import hashlib
 
 HOST = 'localhost'
-PORT = 12345
+PORT = 8001
+TIMEOUT = 2
+PAYLOAD_MAX = 4
 
+def checksum(msg):
+    return hashlib.md5(msg.encode()).hexdigest()[:8]
 
-def calcular_checksum(mensagem: str) -> str:
-    dados = mensagem.encode()
-    if len(dados) % 2 != 0:
-        dados += b'\x00'
+def fragmentar(texto):
+    return [texto[i:i+PAYLOAD_MAX] for i in range(0, len(texto), PAYLOAD_MAX)]
 
-    soma = 0
-    for i in range(0, len(dados), 2):
-        palavra = (dados[i] << 8) + dados[i + 1]
-        soma += palavra
-        soma = (soma & 0xFFFF) + (soma >> 16)
+def montar_pacote(seq, payload, corrompido=False):
+    cs = "00000000" if corrompido else checksum(payload)
+    return f"{seq}|{cs}|{payload}"
 
-    checksum = ~soma & 0xFFFF
-    return format(checksum, '04x')
+MAX_RETRIES = 3
 
+def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
+    total = len(fragmentos)
+    base = 0
+    enviados = {}
+    tentativas = {} 
 
-def enviar_pacote(socket_cliente, sequencia, mensagem):
+    while base < total:
+        fim = min(base + janela, total)
 
-    checksum = calcular_checksum(mensagem)
-    pacote = f"{sequencia}|{checksum}|{mensagem}"
-    socket_cliente.send(pacote.encode())
-    print(f"  [ENVIO] Pacote {sequencia} enviado: '{mensagem}'")
+        for seq in range(base, fim):
+            if seq not in enviados:
+                t = tentativas.get(seq, 0)
+                corrompido = (seq in pacotes_errar) and (t == 0)
+                pkt = montar_pacote(seq, fragmentos[seq], corrompido)
+                sock.send(pkt.encode())
+                enviados[seq] = fragmentos[seq]
+                tentativas[seq] = t + 1
+                flag = " [CORROMPIDO]" if corrompido else f" (tentativa {t+1})" if t > 0 else ""
+                print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}'{flag}")
 
+        try:
+            sock.settimeout(TIMEOUT)
+            resposta = sock.recv(1024).decode()
+            print(f"  [SERVIDOR] {resposta}")
 
-def aguardar_ack(socket_cliente, sequencia_esperada):
+            if resposta.startswith("ACK"):
+                ack_seq = int(resposta.split("|")[1])
+                if modo == 'go-back-n':
+                    base = ack_seq + 1
+                else:
+                    enviados.pop(ack_seq, None)
+                    while base not in enviados and base < total:
+                        base += 1
 
-    resposta = socket_cliente.recv(1024).decode()
-    print(f"  [SERVIDOR] {resposta}")
+            elif resposta.startswith("NACK"):
+                nack_seq = int(resposta.split("|")[1])
+                t_atual = tentativas.get(nack_seq, 0)
+                print(f"  [!] NACK seq={nack_seq} (tentativa {t_atual}/{MAX_RETRIES})")
 
-    if resposta.startswith(f"ACK|{sequencia_esperada}"):
-        return True
-    return False
+                if t_atual >= MAX_RETRIES:
+                    print(f"  [✗] Pacote {nack_seq} falhou {MAX_RETRIES}x. Abortando.")
+                    return
 
+                if modo == 'go-back-n':
+                    for s in range(nack_seq, fim):
+                        enviados.pop(s, None)
+                    base = nack_seq
+                else:
+                    enviados.pop(nack_seq, None)
 
-def modo_go_back_n(socket_cliente, tamanho_max_msg):
+        except socket.timeout:
+            print(f"  [!] Timeout — reenviando a partir de {base}")
+            for s in range(base, fim):
+                enviados.pop(s, None)
 
-    print("\n[*] Modo: Go-Back-N")
-
-    mensagem = input("Digite a mensagem a ser enviada: ").strip()
-
-    if len(mensagem) > tamanho_max_msg:
-        print(f"[!] Erro: mensagem excede o tamanho máximo ({tamanho_max_msg} caracteres).")
-        return
-
-    enviar_pacote(socket_cliente, 1, mensagem)
-
-    if aguardar_ack(socket_cliente, 1):
-        print("[✓] Mensagem entregue com sucesso (canal confiável — ACK na 1ª tentativa).")
-    else:
-        print("[!] Resposta inesperada do servidor.")
-
-
-def modo_repeticao_seletiva(socket_cliente, tamanho_max_msg):
-
-    print("\n[*] Modo: Repetição Seletiva")
-
-    total_pacotes = int(input("Quantos pacotes deseja enviar? ").strip())
-
-    print(f"\n[*] Enviando {total_pacotes} pacote(s) — canal confiável, sem perdas/erros.\n")
-
-    for i in range(1, total_pacotes + 1):
-        mensagem = f"Pacote {i}"
-
-        if len(mensagem) > tamanho_max_msg:
-            print(f"[!] Pacote {i} excede o tamanho permitido ({tamanho_max_msg} caracteres). Pulando.")
-            continue
-
-        enviar_pacote(socket_cliente, i, mensagem)
-
-        if aguardar_ack(socket_cliente, i):
-            print(f"  [✓] Pacote {i} confirmado.\n")
-        else:
-            print(f"  [!] Resposta inesperada para pacote {i}.\n")
-
-    print(f"[✓] Todos os {total_pacotes} pacote(s) entregues com sucesso.")
-
+    print("[✓] Todos os fragmentos entregues.")
 
 def iniciar_cliente():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket_cliente:
-        socket_cliente.connect((HOST, PORT))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.connect((HOST, PORT))
         print("[*] Conectado ao servidor.")
 
-        tamanho_max_msg = int(input("Digite o tamanho máximo da mensagem em caracteres: ").strip())
-        socket_cliente.send(str(tamanho_max_msg).encode())
-        print(f"[*] Tamanho máximo definido: {tamanho_max_msg} caracteres")
+        # Handshake: recebe janela e envia modo
+        janela = int(sock.recv(1024).decode())
+        print(f"[*] Janela recebida do servidor: {janela}")
 
+        print("Modo: 1-Go-Back-N  2-Repetição Seletiva")
+        modo_op = input("Opção: ").strip()
+        modo = 'go-back-n' if modo_op == '1' else 'selective-repeat'
+        sock.send(modo.encode())
 
-        print("\nEscolha o modo de envio:")
-        print("  1 - Go-Back-N")
-        print("  2 - Repetição Seletiva")
-        modo_envio = input("Opção: ").strip()
-        socket_cliente.send(modo_envio.encode())
+        while True:
+            print("\n1-Enviar mensagem  2-Sair")
+            op = input("Opção: ").strip()
+            if op == '2':
+                break
+            if op != '1':
+                continue
 
-        if modo_envio == '1':
-            modo_go_back_n(socket_cliente, tamanho_max_msg)
+            texto = input("Mensagem (max 30 chars): ").strip()[:30]
+            fragmentos = fragmentar(texto)
+            print(f"[*] {len(fragmentos)} fragmento(s) de até {PAYLOAD_MAX} chars")
 
-        elif modo_envio == '2':
-            modo_repeticao_seletiva(socket_cliente, tamanho_max_msg)
+            errar = input("Simular erro em quais seqs? (ex: 1,3 ou Enter pra nenhum): ").strip()
+            pacotes_errar = set(int(x) for x in errar.split(',') if x.strip().isdigit()) if errar else set()
 
-        else:
-            print("[!] Opção inválida. Encerrando cliente.")
+            sock.send(str(len(fragmentos)).encode())
+            sock.recv(1024)
+
+            enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar)
 
 if __name__ == "__main__":
     iniciar_cliente()

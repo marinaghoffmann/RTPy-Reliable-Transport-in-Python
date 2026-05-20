@@ -1,99 +1,107 @@
 import socket
+import hashlib
 
 HOST = 'localhost'
-PORT = 12345
+PORT = 8001
+JANELA_INICIAL = 5
 
-MODOS = {
-    '1': 'Go-Back-N',
-    '2': 'Repetição Seletiva',
-}
+def checksum(msg):
+    return hashlib.md5(msg.encode()).hexdigest()[:8]
 
-def calcular_checksum(mensagem: str) -> str:
-    dados = mensagem.encode()
-    if len(dados) % 2 != 0:
-        dados += b'\x00'
-
-    soma = 0
-    for i in range(0, len(dados), 2):
-        palavra = (dados[i] << 8) + dados[i + 1]
-        soma += palavra
-        soma = (soma & 0xFFFF) + (soma >> 16)
-
-    checksum = ~soma & 0xFFFF
-    return format(checksum, '04x')
-
-
-def processar_pacote(conexao, dados):
-
+def processar_pacote(dados, esperado, modo, buffer_sr):
     partes = dados.split('|', 2)
-
     if len(partes) != 3:
-        print("[!] Pacote malformado recebido. Ignorando.")
-        conexao.send("NACK|MALFORMADO".encode())
-        return True
+        print("  [!] Pacote malformado.")
+        return None, False
 
-    sequencia_str, checksum_recebido, mensagem = partes
+    seq_str, cs_recebido, payload = partes
+    seq = int(seq_str)
+    cs_calc = checksum(payload)
+    ok = cs_recebido == cs_calc
 
-    try:
-        sequencia = int(sequencia_str)
-    except ValueError:
-        print(f"[!] Número de sequência inválido: '{sequencia_str}'. Ignorando.")
-        conexao.send("NACK|SEQ_INV".encode())
-        return True
+    print(f"  [PKT] seq={seq} payload='{payload}' cs={'OK' if ok else 'ERRO'} esperado={esperado}")
 
-    checksum_calculado = calcular_checksum(mensagem)
+    if not ok:
+        return seq, False
 
-    if checksum_recebido != checksum_calculado:
-        print(f"  [!] Erro de integridade no pacote {sequencia}. Enviando NACK.")
-        conexao.send(f"NACK|{sequencia}".encode())
-    else:
-        print(f"  [✓] Pacote {sequencia} recebido corretamente: '{mensagem}'")
-        conexao.send(f"ACK|{sequencia}".encode())
+    if modo == 'go-back-n':
+        if seq == esperado:
+            return seq, True
+        return seq, False  
 
-    return True
-
+    else: 
+        buffer_sr[seq] = payload
+        return seq, True
 
 def iniciar_servidor():
-    servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    servidor.bind((HOST, PORT))
-    servidor.listen()
-    print(f"[*] Servidor aguardando conexões em {HOST}:{PORT}\n")
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((HOST, PORT))
+    srv.listen()
+    print(f"[*] Servidor em {HOST}:{PORT}\n")
 
     while True:
-        conexao, endereco = servidor.accept()
+        conn, addr = srv.accept()
+        print(f"[+] Conexão de {addr}")
 
-        print(f"\n[+] Conexão estabelecida com {endereco}")
-
-        tamanho_maximo = int(conexao.recv(1024).decode())
-        print(f"[*] Tamanho máximo da mensagem: {tamanho_maximo} caracteres")
-
-        modo_operacao = conexao.recv(1024).decode()
-        nome_modo = MODOS.get(modo_operacao, f"Desconhecido ({modo_operacao})")
-        print(f"[*] Handshake concluído! Modo: {nome_modo}")
-        print(f"[*] Canal confiável ativo — sem simulação de erros ou perdas.\n")
+        conn.send(str(JANELA_INICIAL).encode())
+        modo = conn.recv(1024).decode()
+        print(f"[*] Modo: {modo} | Janela: {JANELA_INICIAL}\n")
 
         while True:
             try:
-                dados = conexao.recv(1024).decode()
-                if not dados:
+                raw = conn.recv(1024).decode()
+                if not raw:
                     break
 
-                continuar = processar_pacote(conexao, dados)
-                if not continuar:
-                    break
+                if raw.isdigit():
+                    total = int(raw)
+                    conn.send(b"OK")
+                    print(f"[*] Esperando {total} fragmento(s)...")
+
+                    recebidos = {}
+                    buffer_sr = {}
+                    esperado = 0
+                    ultimo_ack = -1
+
+                    while esperado < total or len(recebidos) < total:
+                        try:
+                            conn.settimeout(5)
+                            pkt = conn.recv(1024).decode()
+                            if not pkt:
+                                break
+
+                            seq, ok = processar_pacote(pkt, esperado, modo, buffer_sr)
+
+                            if ok:
+                                if modo == 'go-back-n':
+                                    recebidos[seq] = pkt.split('|', 2)[2]
+                                    esperado = seq + 1
+                                    conn.send(f"ACK|{seq}".encode())
+                                else:
+                                    recebidos[seq] = buffer_sr.get(seq, '')
+                                    conn.send(f"ACK|{seq}".encode())
+                                    # Avança esperado em sequência
+                                    while esperado in recebidos:
+                                        esperado += 1
+
+                                if len(recebidos) == total:
+                                    break
+                            else:
+                                conn.send(f"NACK|{seq}".encode())
+
+                        except socket.timeout:
+                            print("  [!] Timeout aguardando pacote.")
+                            break
+
+                    mensagem_final = ''.join(recebidos[i] for i in sorted(recebidos))
+                    print(f"\n[✓] Mensagem completa: '{mensagem_final}'\n")
 
             except ConnectionResetError:
-                print(f"[!] Conexão com {endereco} encerrada abruptamente.")
-                break
-            except Exception as e:
-                print(f"[!] Erro inesperado com {endereco}: {e}")
                 break
 
-        conexao.close()
-        print(f"\n[-] Conexão encerrada com {endereco}")
-        print("[*] Aguardando próxima conexão...\n")
-
+        conn.close()
+        print(f"[-] Conexão encerrada com {addr}\n")
 
 if __name__ == "__main__":
     iniciar_servidor()
