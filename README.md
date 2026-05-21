@@ -1,140 +1,132 @@
-# 📡 RTPy — Reliable Transport in Python
+# RTPy - Reliable Transport in Python
 
-## 📌 Sobre o Projeto
-
-Implementação de uma aplicação **Cliente-Servidor** em Python utilizando sockets TCP. O projeto estabelece comunicação confiável com handshake inicial de configuração, verificação de integridade via checksum e suporte a dois modos de transporte: **Go-Back-N** e **Repetição Seletiva**.
-
-> **Escopo atual:** canal de comunicação ideal — sem simulação de erros ou perdas de pacotes.
+Aplicacao cliente-servidor que implementa transporte confiavel de dados na camada de aplicacao, sobre um canal com perdas e erros simulados.
 
 ---
 
-## 🚀 Funcionalidades Implementadas
-
-### 🔹 Conexão via Socket TCP
-- Cliente e servidor se conectam via `socket.AF_INET / SOCK_STREAM` (TCP)
-- Servidor aguarda novas conexões em loop, podendo atender múltiplos clientes sequencialmente
-
-### 🔹 Handshake Inicial
-Ao estabelecer a conexão, cliente e servidor trocam as seguintes informações antes de qualquer envio de dados:
-
-| Campo | Descrição |
-|---|---|
-| `tamanho_maximo` | Tamanho máximo permitido para mensagens (em caracteres) |
-| `modo_operacao` | Modo de transporte escolhido (`1` = Go-Back-N, `2` = Repetição Seletiva) |
-
-### 🔹 Verificação de Integridade (Checksum)
-- Cada pacote enviado inclui um **checksum de 16 bits** calculado sobre a mensagem (soma com complemento de 1, estilo TCP/UDP)
-- O servidor recalcula o checksum ao receber o pacote e compara com o valor recebido
-- Garante detecção de corrupção nos dados
-
-### 🔹 Formato dos Pacotes
-```
-<sequencia>|<checksum>|<mensagem>
-```
-Exemplo: `1|a3f2|Olá, servidor!`
-
-### 🔹 Respostas do Servidor (ACK / NACK)
-
-| Resposta | Quando é enviada |
-|---|---|
-| `ACK\|N` | Pacote N recebido e íntegro |
-| `NACK\|N` | Checksum incorreto ou pacote malformado |
-
-### 🔹 Modos de Operação
-
-**Go-Back-N (`1`)**
-- Envia uma mensagem por vez, digitada pelo usuário
-- Aguarda ACK antes de encerrar
-
-**Repetição Seletiva (`2`)**
-- Envia N pacotes sequenciais (gerados automaticamente como `"Pacote 1"`, `"Pacote 2"`, ...)
-- Aguarda ACK individualmente para cada pacote
-- Valida o tamanho máximo antes de cada envio
-
----
-
-## 📂 Estrutura do Projeto
+## Estrutura do projeto
 
 ```
 .
-├── Servidor.py   # Lógica do servidor: handshake, recebimento e validação de pacotes
-├── Cliente.py    # Lógica do cliente: handshake, envio e modos de operação
+├── Servidor.py
+├── Cliente.py
 └── README.md
 ```
 
 ---
 
-## 🛠️ Como Executar
+## Protocolo de aplicacao
 
-### Pré-requisitos
-- Python 3.x instalado
-- Nenhuma dependência externa necessária
+Cada pacote trocado entre cliente e servidor segue o formato:
 
-### ▶️ Passo 1 — Iniciar o Servidor
+```
+<seq>|<checksum>|<payload>
+```
+
+- `seq`: numero de sequencia inteiro (0, 1, 2, ...)
+- `checksum`: 4 digitos hexadecimais calculados pelo algoritmo de complemento de 1 sobre os bytes do payload
+- `payload`: ate 4 caracteres de conteudo util
+
+Respostas do servidor:
+
+- `ACK|<seq>` — pacote recebido e integro
+- `NACK|<seq>` — pacote com erro de checksum ou fora de ordem (Go-Back-N)
+
+### Handshake inicial
+
+Ao conectar, a seguinte sequencia ocorre antes de qualquer troca de mensagens:
+
+1. Servidor envia o tamanho da janela (1 a 5)
+2. Cliente envia o limite maximo de caracteres por mensagem (minimo 30)
+3. Servidor confirma com `OK`
+4. Cliente envia o modo de operacao: `go-back-n` ou `selective-repeat`
+
+---
+
+## Como executar
+
+### Pre-requisitos
+
+- Python 3.x
+
+### Passo 1 — Iniciar o servidor
+
 ```bash
 python3 Servidor.py
 ```
-O servidor ficará aguardando conexões em `localhost:12345`.
 
-### ▶️ Passo 2 — Iniciar o Cliente
+Ao receber uma conexao, o servidor solicitara o tamanho da janela no terminal (1 a 5). Pressionar Enter usa o valor padrao 5.
+
+### Passo 2 — Iniciar o cliente
+
 Em outro terminal:
+
 ```bash
 python3 Cliente.py
 ```
 
-### ▶️ Passo 3 — Handshake
-O cliente solicitará dois dados antes de enviar qualquer mensagem:
+### Passo 3 — Handshake
 
-```
-Digite o tamanho máximo da mensagem em caracteres: 50
+O cliente exibira a janela recebida e pedira:
 
-Escolha o modo de envio:
-  1 - Go-Back-N
-  2 - Repetição Seletiva
-Opção: 1
-```
+1. Limite maximo de caracteres por mensagem (minimo 30)
+2. Modo de operacao: `1` para Go-Back-N, `2` para Repeticao Seletiva
 
-### ▶️ Passo 4 — Envio de Mensagens
+### Passo 4 — Enviar mensagens
 
-**Modo Go-Back-N:**
-```
-Digite a mensagem a ser enviada: Olá, mundo!
-  [ENVIO] Pacote 1 enviado: 'Olá, mundo!'
-  [SERVIDOR] ACK|1
-[✓] Mensagem entregue com sucesso (canal confiável — ACK na 1ª tentativa).
-```
+O menu principal oferece:
 
-**Modo Repetição Seletiva:**
-```
-Quantos pacotes deseja enviar? 3
+- `1` Enviar mensagem
+- `2` Sair
 
-[*] Enviando 3 pacote(s) — canal confiável, sem perdas/erros.
+Ao escolher enviar, o cliente pedira:
 
-  [ENVIO] Pacote 1 enviado: 'Pacote 1'
-  [SERVIDOR] ACK|1
-  [✓] Pacote 1 confirmado.
-
-  [ENVIO] Pacote 2 enviado: 'Pacote 2'
-  [SERVIDOR] ACK|2
-  [✓] Pacote 2 confirmado.
-  ...
-```
+1. O texto da mensagem (truncado no limite definido no handshake)
+2. Tipo de envio: `1` Lote (usa a janela completa) ou `2` Isolado (um fragmento por vez)
+3. Sequencias a corromper intencionalmente (ex: `0,2` ou Enter para nenhum)
 
 ---
 
-## 🔧 Configurações
+## Caracteristicas implementadas
 
-| Parâmetro | Valor padrão | Onde alterar |
-|---|---|---|
-| Host | `localhost` | `HOST` em `Cliente.py` e `Servidor.py` |
-| Porta | `12345` | `PORT` em `Cliente.py` e `Servidor.py` |
-| Buffer de recepção | `1024` bytes | `recv(1024)` nas duas classes |
+### Checksum (complemento de 1)
+
+Calculado manualmente sobre os bytes do payload, agrupados em palavras de 16 bits com carry circular. O resultado e um valor hexadecimal de 4 digitos. O servidor recalcula o checksum ao receber cada pacote e rejeita com NACK caso nao confira.
+
+### Numero de sequencia
+
+Cada fragmento carrega um numero de sequencia inteiro crescente a partir de 0.
+
+### Temporizador
+
+O cliente aguarda resposta por `TIMEOUT = 2` segundos. Em caso de timeout, os pacotes da janela atual sao reenviados.
+
+### ACK e NACK
+
+O servidor confirma individualmente cada pacote aceito (ACK) ou sinaliza erro (NACK). O cliente exibe cada resposta recebida.
+
+### Janela e paralelismo
+
+O tamanho da janela e determinado pelo servidor no handshake, variando de 1 a 5. O cliente pode ainda escolher envio em lote (respeita a janela) ou isolado (janela forcada para 1).
+
+### Go-Back-N
+
+Em caso de NACK, o cliente reenvia o pacote com erro e todos os subsequentes dentro da janela.
+
+### Repeticao Seletiva
+
+Em caso de NACK, apenas o pacote com erro e reenviado. O servidor aceita pacotes fora de ordem e os reordena ao montar a mensagem final.
+
+### Simulacao de erros
+
+O cliente aceita uma lista de numeros de sequencia a corromper. O checksum desses pacotes e substituido por `0000` na primeira tentativa, forcando um NACK do servidor. Nas retransmissoes o pacote e enviado corretamente.
+
+### Limite de retransmissao
+
+Apos `MAX_RETRIES = 3` tentativas falhas no mesmo pacote, o cliente aborta o envio.
 
 ---
 
-## 📋 Escopo e Limitações (Entrega 1 e 2)
+## Uso de IA
 
-- ✅ Canal confiável (TCP) — sem perdas ou corrupção simuladas
-- ✅ Handshake com tamanho máximo e modo de operação
-- ✅ Checksum para detecção de erros
-- ✅ ACK/NACK por pacote
+Claude (Anthropic) foi utilizado como auxilio na revisao e ajustes do codigo, especificamente na substituicao do checksum MD5 pelo algoritmo de complemento de 1, na correcao de inconsistencias entre cliente e servidor, e na implementacao dos ajustes de janela dinamica e limite de caracteres configuravel.
