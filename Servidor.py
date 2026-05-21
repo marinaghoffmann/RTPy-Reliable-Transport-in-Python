@@ -5,8 +5,16 @@ HOST = 'localhost'
 PORT = 8001
 JANELA_INICIAL = 5
 
-def checksum(msg):
-    return hashlib.md5(msg.encode()).hexdigest()[:8]
+def calcular_checksum(msg: str) -> str:
+    dados = msg.encode()
+    if len(dados) % 2 != 0:
+        dados += b'\x00'
+    soma = 0
+    for i in range(0, len(dados), 2):
+        palavra = (dados[i] << 8) + dados[i + 1]
+        soma += palavra
+        soma = (soma & 0xFFFF) + (soma >> 16)
+    return format(~soma & 0xFFFF, '04x')[:8]
 
 def processar_pacote(dados, esperado, modo, buffer_sr):
     partes = dados.split('|', 2)
@@ -16,7 +24,7 @@ def processar_pacote(dados, esperado, modo, buffer_sr):
 
     seq_str, cs_recebido, payload = partes
     seq = int(seq_str)
-    cs_calc = checksum(payload)
+    cs_calc = calcular_checksum(payload)
     ok = cs_recebido == cs_calc
 
     print(f"  [PKT] seq={seq} payload='{payload}' cs={'OK' if ok else 'ERRO'} esperado={esperado}")

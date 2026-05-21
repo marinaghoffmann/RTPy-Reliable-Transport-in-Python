@@ -6,14 +6,22 @@ PORT = 8001
 TIMEOUT = 2
 PAYLOAD_MAX = 4
 
-def checksum(msg):
-    return hashlib.md5(msg.encode()).hexdigest()[:8]
+def calcular_checksum(msg: str) -> str:
+    dados = msg.encode()
+    if len(dados) % 2 != 0:
+        dados += b'\x00'
+    soma = 0
+    for i in range(0, len(dados), 2):
+        palavra = (dados[i] << 8) + dados[i + 1]
+        soma += palavra
+        soma = (soma & 0xFFFF) + (soma >> 16)
+    return format(~soma & 0xFFFF, '04x')
 
 def fragmentar(texto):
     return [texto[i:i+PAYLOAD_MAX] for i in range(0, len(texto), PAYLOAD_MAX)]
 
 def montar_pacote(seq, payload, corrompido=False):
-    cs = "00000000" if corrompido else checksum(payload)
+    cs = "0000" if corrompido else calcular_checksum(payload)
     return f"{seq}|{cs}|{payload}"
 
 MAX_RETRIES = 3
