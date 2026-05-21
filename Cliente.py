@@ -30,20 +30,21 @@ MAX_RETRIES = 3
 def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
     total = len(fragmentos)
     base = 0
-    enviados = {}
+    confirmados = set()   # seqs que receberam ACK
+    pendentes = set()     # seqs enviados mas sem ACK ainda
     tentativas = {}
-    reenviar = False  
+    reenviar = False
 
     while base < total:
         fim = min(base + janela, total)
 
         for seq in range(base, fim):
-            if seq not in enviados:
+            if seq not in confirmados and seq not in pendentes:
                 t = tentativas.get(seq, 0)
                 corrompido = (seq in pacotes_errar) and (t == 0)
                 pkt = montar_pacote(seq, fragmentos[seq], corrompido)
                 sock.send(pkt.encode())
-                enviados[seq] = fragmentos[seq]
+                pendentes.add(seq)
                 tentativas[seq] = t + 1
                 flag = " [CORROMPIDO]" if corrompido else f" (tentativa {t+1})" if t > 0 else ""
                 print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}'{flag}")
@@ -66,11 +67,13 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
 
                 if resposta.startswith("ACK"):
                     ack_seq = int(resposta.split("|")[1])
+                    confirmados.add(ack_seq)
+                    pendentes.discard(ack_seq)
                     if modo == 'go-back-n':
                         base = ack_seq + 1
                     else:
-                        enviados.pop(ack_seq, None)
-                        while base not in enviados and base < total:
+                        # avanca base ate o primeiro nao confirmado
+                        while base in confirmados:
                             base += 1
 
                 elif resposta.startswith("NACK"):
@@ -83,19 +86,18 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
                         return
 
                     if modo == 'go-back-n':
-                        # limpa tudo a partir do pacote com erro e volta a base
-                        for s in list(enviados.keys()):
-                            if s >= nack_seq:
-                                enviados.pop(s, None)
+                        # retrocede base e limpa pendentes a partir de nack_seq
+                        pendentes = {s for s in pendentes if s < nack_seq}
                         base = nack_seq
                         reenviar = True
-                        break  # ignora ACKs posteriores no mesmo recv, refaz a janela
+                        break  # descarta respostas posteriores neste recv
                     else:
-                        enviados.pop(nack_seq, None)
+                        # SR: marca para reenvio removendo dos pendentes
+                        pendentes.discard(nack_seq)
 
         except socket.timeout:
             print(f"  [!] Timeout - reenviando a partir de {base}")
-            enviados.clear()
+            pendentes.clear()
 
     print("[*] Todos os fragmentos entregues.")
 
