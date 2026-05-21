@@ -1,5 +1,4 @@
 import socket
-import hashlib
 
 HOST = 'localhost'
 PORT = 8001
@@ -30,7 +29,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
     total = len(fragmentos)
     base = 0
     enviados = {}
-    tentativas = {} 
+    tentativas = {}
 
     while base < total:
         fim = min(base + janela, total)
@@ -66,7 +65,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
                 print(f"  [!] NACK seq={nack_seq} (tentativa {t_atual}/{MAX_RETRIES})")
 
                 if t_atual >= MAX_RETRIES:
-                    print(f"  [✗] Pacote {nack_seq} falhou {MAX_RETRIES}x. Abortando.")
+                    print(f"  [x] Pacote {nack_seq} falhou {MAX_RETRIES}x. Abortando.")
                     return
 
                 if modo == 'go-back-n':
@@ -77,37 +76,52 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
                     enviados.pop(nack_seq, None)
 
         except socket.timeout:
-            print(f"  [!] Timeout — reenviando a partir de {base}")
+            print(f"  [!] Timeout - reenviando a partir de {base}")
             for s in range(base, fim):
                 enviados.pop(s, None)
 
-    print("[✓] Todos os fragmentos entregues.")
+    print("[*] Todos os fragmentos entregues.")
 
 def iniciar_cliente():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((HOST, PORT))
         print("[*] Conectado ao servidor.")
 
-        # Handshake: recebe janela e envia modo
+        # Handshake: recebe janela, define limite de chars, envia modo
         janela = int(sock.recv(1024).decode())
         print(f"[*] Janela recebida do servidor: {janela}")
 
-        print("Modo: 1-Go-Back-N  2-Repetição Seletiva")
-        modo_op = input("Opção: ").strip()
+        while True:
+            try:
+                max_chars = int(input("Limite maximo de caracteres por mensagem (min 30): ").strip())
+                if max_chars >= 30:
+                    break
+                print("  [!] O limite deve ser de no minimo 30 caracteres.")
+            except ValueError:
+                print("  [!] Digite um numero valido.")
+        sock.send(str(max_chars).encode())
+        sock.recv(1024)  # OK do servidor
+
+        print("Modo: 1-Go-Back-N  2-Repeticao Seletiva")
+        modo_op = input("Opcao: ").strip()
         modo = 'go-back-n' if modo_op == '1' else 'selective-repeat'
         sock.send(modo.encode())
 
         while True:
             print("\n1-Enviar mensagem  2-Sair")
-            op = input("Opção: ").strip()
+            op = input("Opcao: ").strip()
             if op == '2':
                 break
             if op != '1':
                 continue
 
-            texto = input("Mensagem (max 30 chars): ").strip()[:30]
+            texto = input(f"Mensagem (max {max_chars} chars): ").strip()[:max_chars]
             fragmentos = fragmentar(texto)
-            print(f"[*] {len(fragmentos)} fragmento(s) de até {PAYLOAD_MAX} chars")
+            print(f"[*] {len(fragmentos)} fragmento(s) de ate {PAYLOAD_MAX} chars")
+
+            print("Envio: 1-Lote (usa janela)  2-Isolado (um por vez)")
+            envio_op = input("Opcao: ").strip()
+            janela_envio = 1 if envio_op == '2' else janela
 
             errar = input("Simular erro em quais seqs? (ex: 1,3 ou Enter pra nenhum): ").strip()
             pacotes_errar = set(int(x) for x in errar.split(',') if x.strip().isdigit()) if errar else set()
@@ -115,7 +129,7 @@ def iniciar_cliente():
             sock.send(str(len(fragmentos)).encode())
             sock.recv(1024)
 
-            enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar)
+            enviar_com_janela(sock, fragmentos, janela_envio, modo, pacotes_errar)
 
 if __name__ == "__main__":
     iniciar_cliente()
