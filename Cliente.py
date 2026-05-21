@@ -1,4 +1,6 @@
 import socket
+import re
+import hashlib
 
 HOST = 'localhost'
 PORT = 8001
@@ -30,6 +32,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
     base = 0
     enviados = {}
     tentativas = {}
+    reenviar = False  
 
     while base < total:
         fim = min(base + janela, total)
@@ -45,40 +48,54 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
                 flag = " [CORROMPIDO]" if corrompido else f" (tentativa {t+1})" if t > 0 else ""
                 print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}'{flag}")
 
+        if reenviar:
+            reenviar = False
+            continue
+
         try:
             sock.settimeout(TIMEOUT)
-            resposta = sock.recv(1024).decode()
-            print(f"  [SERVIDOR] {resposta}")
+            raw = sock.recv(1024).decode()
 
-            if resposta.startswith("ACK"):
-                ack_seq = int(resposta.split("|")[1])
-                if modo == 'go-back-n':
-                    base = ack_seq + 1
-                else:
-                    enviados.pop(ack_seq, None)
-                    while base not in enviados and base < total:
-                        base += 1
+            # TCP pode juntar multiplas respostas numa so leitura; separar antes de processar
+            respostas = re.findall(r'N?ACK\|\d+', raw)
+            if not respostas:
+                respostas = [raw]
 
-            elif resposta.startswith("NACK"):
-                nack_seq = int(resposta.split("|")[1])
-                t_atual = tentativas.get(nack_seq, 0)
-                print(f"  [!] NACK seq={nack_seq} (tentativa {t_atual}/{MAX_RETRIES})")
+            for resposta in respostas:
+                print(f"  [SERVIDOR] {resposta}")
 
-                if t_atual >= MAX_RETRIES:
-                    print(f"  [x] Pacote {nack_seq} falhou {MAX_RETRIES}x. Abortando.")
-                    return
+                if resposta.startswith("ACK"):
+                    ack_seq = int(resposta.split("|")[1])
+                    if modo == 'go-back-n':
+                        base = ack_seq + 1
+                    else:
+                        enviados.pop(ack_seq, None)
+                        while base not in enviados and base < total:
+                            base += 1
 
-                if modo == 'go-back-n':
-                    for s in range(nack_seq, fim):
-                        enviados.pop(s, None)
-                    base = nack_seq
-                else:
-                    enviados.pop(nack_seq, None)
+                elif resposta.startswith("NACK"):
+                    nack_seq = int(resposta.split("|")[1])
+                    t_atual = tentativas.get(nack_seq, 0)
+                    print(f"  [!] NACK seq={nack_seq} (tentativa {t_atual}/{MAX_RETRIES})")
+
+                    if t_atual >= MAX_RETRIES:
+                        print(f"  [x] Pacote {nack_seq} falhou {MAX_RETRIES}x. Abortando.")
+                        return
+
+                    if modo == 'go-back-n':
+                        # limpa tudo a partir do pacote com erro e volta a base
+                        for s in list(enviados.keys()):
+                            if s >= nack_seq:
+                                enviados.pop(s, None)
+                        base = nack_seq
+                        reenviar = True
+                        break  # ignora ACKs posteriores no mesmo recv, refaz a janela
+                    else:
+                        enviados.pop(nack_seq, None)
 
         except socket.timeout:
             print(f"  [!] Timeout - reenviando a partir de {base}")
-            for s in range(base, fim):
-                enviados.pop(s, None)
+            enviados.clear()
 
     print("[*] Todos os fragmentos entregues.")
 

@@ -1,4 +1,5 @@
 import socket
+import hashlib
 
 HOST = 'localhost'
 PORT = 8001
@@ -85,6 +86,15 @@ def iniciar_servidor():
                             if not pkt:
                                 break
 
+                            if pkt == "RESET":
+                                print("  [!] Cliente abortou a transmissão por excesso de erros. Resetando buffer.")
+                                recebidos.clear()
+                                break 
+
+                            if '|' not in pkt:
+                                print(f"  [!] Pacote inválido ignorado: '{pkt}'")
+                                continue
+
                             seq, ok = processar_pacote(pkt, esperado, modo, buffer_sr)
 
                             if ok:
@@ -99,7 +109,11 @@ def iniciar_servidor():
                                         esperado += 1
 
                                 if len(recebidos) == total:
-                                    break
+                                    if len(recebidos) == total:
+                                        mensagem_final = ''.join(recebidos[i] for i in sorted(recebidos))
+                                        print(f"\n[*] Mensagem completa: '{mensagem_final}'\n")
+                                    else:
+                                        print("\n[!] Transmissão incompleta descartada.\n")       
                             else:
                                 conn.send(f"NACK|{seq}".encode())
 
