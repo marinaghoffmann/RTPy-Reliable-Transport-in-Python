@@ -1,13 +1,18 @@
 import socket
-import hashlib
 
 HOST = 'localhost'
 PORT = 8001
 TIMEOUT = 2
 PAYLOAD_MAX = 4
+# Chave compartilhada para criptografia simétrica XOR
+# deve ser igual no servidor para que a decriptação funcione
+CHAVE = "chave123"
 
-def calcular_checksum(msg: str) -> str:
-    dados = msg.encode()
+# Checksum: soma de verificação de 16 bits (sem bibliotecas externas)
+# percorre os bytes da mensagem de 2 em 2, somando palavras de 16 bits
+# ao final inverte os bits para gerar o valor de verificação
+def calcular_checksum(mensagem: str) -> str:
+    dados = mensagem.encode()
     if len(dados) % 2 != 0:
         dados += b'\x00'
     soma = 0
@@ -17,12 +22,21 @@ def calcular_checksum(msg: str) -> str:
         soma = (soma & 0xFFFF) + (soma >> 16)
     return format(~soma & 0xFFFF, '04x')
 
+# Criptografia simétrica XOR: cada caractere do payload é combinado
+# com um caractere da chave usando XOR — aplicar duas vezes volta ao original
+def encriptar(texto):
+    return ''.join(chr(ord(c) ^ ord(CHAVE[i % len(CHAVE)])) for i, c in enumerate(texto))
+
+# Fragmentação: quebra o texto em pedaços de até PAYLOAD_MAX (4) caracteres
 def fragmentar(texto):
     return [texto[i:i+PAYLOAD_MAX] for i in range(0, len(texto), PAYLOAD_MAX)]
 
 def montar_pacote(seq, payload, corrompido=False):
+    # Checksum calculado sobre o payload original (antes de encriptar)
     cs = "0000" if corrompido else calcular_checksum(payload)
-    return f"{seq}|{cs}|{payload}"
+    # Payload encriptado antes de enviar pelo socket
+    payload_cripto = encriptar(payload)
+    return f"{seq}|{cs}|{payload_cripto}"
 
 MAX_RETRIES = 3
 
@@ -30,7 +44,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
     total = len(fragmentos)
     base = 0
     enviados = {}
-    tentativas = {} 
+    tentativas = {}
 
     while base < total:
         fim = min(base + janela, total)
@@ -88,7 +102,6 @@ def iniciar_cliente():
         sock.connect((HOST, PORT))
         print("[*] Conectado ao servidor.")
 
-        # Handshake: recebe janela e envia modo
         janela = int(sock.recv(1024).decode())
         print(f"[*] Janela recebida do servidor: {janela}")
 
@@ -109,7 +122,7 @@ def iniciar_cliente():
             fragmentos = fragmentar(texto)
             print(f"[*] {len(fragmentos)} fragmento(s) de até {PAYLOAD_MAX} chars")
 
-            errar = input("Simular erro em quais seqs? (ex: 1,3 ou Enter pra nenhum): ").strip()
+            errar = input("Simular erro em quais seqs? (ex: 0,2 ou Enter pra nenhum): ").strip()
             pacotes_errar = set(int(x) for x in errar.split(',') if x.strip().isdigit()) if errar else set()
 
             sock.send(str(len(fragmentos)).encode())
