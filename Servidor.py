@@ -1,12 +1,15 @@
 import socket
-import hashlib
 
 HOST = 'localhost'
 PORT = 8001
 JANELA_INICIAL = 5
+# Chave compartilhada para criptografia simétrica XOR
+# deve ser igual à do cliente para que a decriptação funcione
+CHAVE = "chave123"
 
-def calcular_checksum(msg: str) -> str:
-    dados = msg.encode()
+# Checksum: mesma lógica do cliente — recalcula e compara para verificar integridade
+def calcular_checksum(mensagem: str) -> str:
+    dados = mensagem.encode()
     if len(dados) % 2 != 0:
         dados += b'\x00'
     soma = 0
@@ -14,7 +17,11 @@ def calcular_checksum(msg: str) -> str:
         palavra = (dados[i] << 8) + dados[i + 1]
         soma += palavra
         soma = (soma & 0xFFFF) + (soma >> 16)
-    return format(~soma & 0xFFFF, '04x')[:8]
+    return format(~soma & 0xFFFF, '04x')
+
+# Decriptação XOR: mesma função da encriptação — XOR aplicado duas vezes volta ao original
+def decriptar(texto):
+    return ''.join(chr(ord(c) ^ ord(CHAVE[i % len(CHAVE)])) for i, c in enumerate(texto))
 
 def processar_pacote(dados, esperado, modo, buffer_sr):
     partes = dados.split('|', 2)
@@ -22,8 +29,10 @@ def processar_pacote(dados, esperado, modo, buffer_sr):
         print("  [!] Pacote malformado.")
         return None, False
 
-    seq_str, cs_recebido, payload = partes
+    seq_str, cs_recebido, payload_cripto = partes
     seq = int(seq_str)
+    # Decripta o payload antes de verificar o checksum
+    payload = decriptar(payload_cripto)
     cs_calc = calcular_checksum(payload)
     ok = cs_recebido == cs_calc
 
@@ -35,9 +44,9 @@ def processar_pacote(dados, esperado, modo, buffer_sr):
     if modo == 'go-back-n':
         if seq == esperado:
             return seq, True
-        return seq, False  
+        return seq, False
 
-    else: 
+    else:
         buffer_sr[seq] = payload
         return seq, True
 
@@ -70,7 +79,6 @@ def iniciar_servidor():
                     recebidos = {}
                     buffer_sr = {}
                     esperado = 0
-                    ultimo_ack = -1
 
                     while esperado < total or len(recebidos) < total:
                         try:
@@ -84,12 +92,12 @@ def iniciar_servidor():
                             if ok:
                                 if modo == 'go-back-n':
                                     recebidos[seq] = pkt.split('|', 2)[2]
+                                    recebidos[seq] = decriptar(recebidos[seq])
                                     esperado = seq + 1
                                     conn.send(f"ACK|{seq}".encode())
                                 else:
                                     recebidos[seq] = buffer_sr.get(seq, '')
                                     conn.send(f"ACK|{seq}".encode())
-                                    # Avança esperado em sequência
                                     while esperado in recebidos:
                                         esperado += 1
 
