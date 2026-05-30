@@ -5,6 +5,10 @@ HOST = 'localhost'
 PORT = 8001
 JANELA_INICIAL = 5
 
+# Chave compartilhada para criptografia simetrica XOR
+# deve ser igual a do cliente para que a decriptacao funcione
+CHAVE = "chave123"
+
 def calcular_checksum(msg: str) -> str:
     dados = msg.encode()
     if len(dados) % 2 != 0:
@@ -16,14 +20,20 @@ def calcular_checksum(msg: str) -> str:
         soma = (soma & 0xFFFF) + (soma >> 16)
     return format(~soma & 0xFFFF, '04x')
 
+# Decriptacao XOR: mesma funcao da encriptacao — XOR aplicado duas vezes volta ao original
+def decriptar(texto):
+    return ''.join(chr(ord(c) ^ ord(CHAVE[i % len(CHAVE)])) for i, c in enumerate(texto))
+
 def processar_pacote(dados, esperado, modo, buffer_sr):
     partes = dados.split('|', 2)
     if len(partes) != 3:
         print("  [!] Pacote malformado.")
         return None, False
 
-    seq_str, cs_recebido, payload = partes
+    seq_str, cs_recebido, payload_cripto = partes
     seq = int(seq_str)
+    # decripta o payload antes de verificar o checksum
+    payload = decriptar(payload_cripto)
     cs_calc = calcular_checksum(payload)
     ok = cs_recebido == cs_calc
 
@@ -39,7 +49,7 @@ def processar_pacote(dados, esperado, modo, buffer_sr):
         return seq, None
 
     else:
-        buffer_sr[seq] = payload
+        buffer_sr[seq] = payload  # armazena ja decriptado
         return seq, True
 
 def iniciar_servidor():
@@ -100,7 +110,9 @@ def iniciar_servidor():
 
                             if ok is True:
                                 if modo == 'go-back-n':
-                                    recebidos[seq] = pkt.split('|', 2)[2]
+                                    # payload ja decriptado dentro de processar_pacote
+                                    payload_original = pkt.split('|', 2)[2]
+                                    recebidos[seq] = decriptar(payload_original)
                                     esperado = seq + 1
                                     conn.send(f"ACK|{seq}".encode())
                                 else:
@@ -128,7 +140,7 @@ def iniciar_servidor():
                     mensagem_final = ''.join(recebidos[i] for i in sorted(recebidos))
                     print(f"\n[*] Mensagem completa: '{mensagem_final}'\n")
 
-            except ConnectionResetError:
+            except (ConnectionResetError, TimeoutError):
                 break
 
         conn.close()

@@ -8,6 +8,10 @@ PORT = 8001
 TIMEOUT = 2
 PAYLOAD_MAX = 4
 
+# Chave compartilhada para criptografia simetrica XOR
+# deve ser igual no servidor para que a decriptacao funcione
+CHAVE = "chave123"
+
 def calcular_checksum(msg: str) -> str:
     dados = msg.encode()
     if len(dados) % 2 != 0:
@@ -19,12 +23,20 @@ def calcular_checksum(msg: str) -> str:
         soma = (soma & 0xFFFF) + (soma >> 16)
     return format(~soma & 0xFFFF, '04x')
 
+# Criptografia simetrica XOR: cada caractere do payload e combinado
+# com um caractere da chave usando XOR — aplicar duas vezes volta ao original
+def encriptar(texto):
+    return ''.join(chr(ord(c) ^ ord(CHAVE[i % len(CHAVE)])) for i, c in enumerate(texto))
+
 def fragmentar(texto):
     return [texto[i:i+PAYLOAD_MAX] for i in range(0, len(texto), PAYLOAD_MAX)]
 
 def montar_pacote(seq, payload, corrompido=False):
+    # checksum calculado sobre o payload original (antes de encriptar)
     cs = "0000" if corrompido else calcular_checksum(payload)
-    return f"{seq}|{cs}|{payload}"
+    # payload encriptado antes de enviar pelo socket
+    payload_cripto = encriptar(payload)
+    return f"{seq}|{cs}|{payload_cripto}"
 
 MAX_RETRIES = 3
 
@@ -52,7 +64,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacot
                     print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}' [PERDIDO]")
                 else:
                     sock.send(pkt.encode())
-                    time.sleep(0.01) #previnindo TCP de juntar pacotes dando um delay p esvaziar o buffer
+                    time.sleep(0.01)  # previne TCP de juntar pacotes num unico recv
                     flag = " [CORROMPIDO]" if corrompido else f" (tentativa {t+1})" if t > 0 else ""
                     print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}'{flag}")
 
@@ -95,7 +107,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacot
                     if modo == 'go-back-n':
                         # retrocede base e limpa pendentes a partir de nack_seq
                         pendentes = {s for s in pendentes if s < nack_seq}
-                        confirmados = {s for s in confirmados if s < nack_seq} 
+                        confirmados = {s for s in confirmados if s < nack_seq}
                         base = nack_seq
                         reenviar = True
                         break  # descarta respostas posteriores neste recv
