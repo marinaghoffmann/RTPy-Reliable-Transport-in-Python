@@ -8,10 +8,12 @@ PORT = 8001
 TIMEOUT = 2
 PAYLOAD_MAX = 4
 
-# Chave compartilhada para criptografia simetrica XOR
-# deve ser igual no servidor para que a decriptacao funcione
+# chave usada pra encriptar/decriptar — tem que ser igual no servidor
 CHAVE = "chave123"
 
+# checksum de 16 bits estilo complemento de 1
+# percorre os bytes 2 a 2, soma como palavras de 16 bits com carry circular
+# inverte os bits no final — servidor refaz o calculo e compara
 def calcular_checksum(msg: str) -> str:
     dados = msg.encode()
     if len(dados) % 2 != 0:
@@ -23,18 +25,19 @@ def calcular_checksum(msg: str) -> str:
         soma = (soma & 0xFFFF) + (soma >> 16)
     return format(~soma & 0xFFFF, '04x')
 
-# Criptografia simetrica XOR: cada caractere do payload e combinado
-# com um caractere da chave usando XOR — aplicar duas vezes volta ao original
+# XOR caractere a caractere com a chave — aplicar duas vezes volta ao original
+# entao a mesma funcao serve pra encriptar e decriptar
 def encriptar(texto):
     return ''.join(chr(ord(c) ^ ord(CHAVE[i % len(CHAVE)])) for i, c in enumerate(texto))
 
+# quebra o texto em pedacos de ate PAYLOAD_MAX caracteres
 def fragmentar(texto):
     return [texto[i:i+PAYLOAD_MAX] for i in range(0, len(texto), PAYLOAD_MAX)]
 
 def montar_pacote(seq, payload, corrompido=False):
-    # checksum calculado sobre o payload original (antes de encriptar)
+    # checksum calculado sobre o payload original, antes de encriptar
+    # se corrompido, manda 0000 no lugar — força NACK no servidor
     cs = "0000" if corrompido else calcular_checksum(payload)
-    # payload encriptado antes de enviar pelo socket
     payload_cripto = encriptar(payload)
     return f"{seq}|{cs}|{payload_cripto}"
 
@@ -43,8 +46,8 @@ MAX_RETRIES = 3
 def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacotes_perder=set()):
     total = len(fragmentos)
     base = 0
-    confirmados = set()   # seqs que receberam ACK
-    pendentes = set()     # seqs enviados mas sem ACK ainda
+    confirmados = set()   # seqs que ja receberam ACK
+    pendentes = set()     # seqs enviados mas ainda aguardando resposta
     tentativas = {}
     reenviar = False
 
@@ -54,21 +57,23 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacot
         for seq in range(base, fim):
             if seq not in confirmados and seq not in pendentes:
                 t = tentativas.get(seq, 0)
-                corrompido = (seq in pacotes_errar) and (t == 0)
-                perdido    = (seq in pacotes_perder) and (t == 0)
+                corrompido = (seq in pacotes_errar) and (t == 0)  # so corrompe na primeira tentativa
+                perdido    = (seq in pacotes_perder) and (t == 0)  # so perde na primeira tentativa
                 pkt = montar_pacote(seq, fragmentos[seq], corrompido)
                 tentativas[seq] = t + 1
                 pendentes.add(seq)
                 if perdido:
-                    # simula perda: pacote nao e transmitido; timeout dispara retransmissao
+                    # nao envia nada — simula pacote sumindo na rede
+                    # o timeout vai cuidar do reenvio
                     print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}' [PERDIDO]")
                 else:
                     sock.send(pkt.encode())
-                    time.sleep(0.01)  # previne TCP de juntar pacotes num unico recv
+                    time.sleep(0.01)  #previnindo TCP de juntar pacotes dando um delay p esvaziar o buffer
                     flag = " [CORROMPIDO]" if corrompido else f" (tentativa {t+1})" if t > 0 else ""
                     print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}'{flag}")
 
         if reenviar:
+            # GBN acabou de retroceder a janela — reenvia sem esperar resposta
             reenviar = False
             continue
 
@@ -76,7 +81,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacot
             sock.settimeout(TIMEOUT)
             raw = sock.recv(1024).decode()
 
-            # TCP pode juntar multiplas respostas numa so leitura; separar antes de processar
+            # TCP pode juntar varios ACKs/NACKs num so recv — separa todos antes de processar
             respostas = re.findall(r'N?ACK\|\d+', raw)
             if not respostas:
                 respostas = [raw]
@@ -91,7 +96,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacot
                     if modo == 'go-back-n':
                         base = ack_seq + 1
                     else:
-                        # avanca base ate o primeiro nao confirmado
+                        # SR: avanca base ate o primeiro buraco
                         while base in confirmados:
                             base += 1
 
@@ -105,17 +110,19 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacot
                         return
 
                     if modo == 'go-back-n':
-                        # retrocede base e limpa pendentes a partir de nack_seq
-                        pendentes = {s for s in pendentes if s < nack_seq}
+                        # retrocede janela ate o pacote com erro
+                        # limpa confirmados tambem — senao o loop pula os seqs que ja estavam confirmados
+                        pendentes   = {s for s in pendentes   if s < nack_seq}
                         confirmados = {s for s in confirmados if s < nack_seq}
                         base = nack_seq
                         reenviar = True
-                        break  # descarta respostas posteriores neste recv
+                        break  # ignora respostas posteriores nesse recv — janela vai resetar
                     else:
-                        # SR: marca para reenvio removendo dos pendentes
+                        # SR: so retira esse seq dos pendentes, os outros ficam
                         pendentes.discard(nack_seq)
 
         except socket.timeout:
+            # nenhuma resposta no prazo — limpa pendentes e reenvia a janela inteira
             print(f"  [!] Timeout - reenviando a partir de {base}")
             pendentes.clear()
 
@@ -126,7 +133,7 @@ def iniciar_cliente():
         sock.connect((HOST, PORT))
         print("[*] Conectado ao servidor.")
 
-        # Handshake: recebe janela, define limite de chars, envia modo
+        # handshake: servidor manda janela, cliente manda limite de chars e modo
         janela = int(sock.recv(1024).decode())
         print(f"[*] Janela recebida do servidor: {janela}")
 
@@ -169,7 +176,7 @@ def iniciar_cliente():
             pacotes_perder = set(int(x) for x in perder.split(',') if x.strip().isdigit()) if perder else set()
 
             sock.send(str(len(fragmentos)).encode())
-            sock.recv(1024)
+            sock.recv(1024)  # OK do servidor
 
             enviar_com_janela(sock, fragmentos, janela_envio, modo, pacotes_errar, pacotes_perder)
 
