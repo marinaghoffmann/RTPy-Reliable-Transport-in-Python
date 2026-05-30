@@ -1,6 +1,7 @@
 import socket
 import re
 import hashlib
+import time
 
 HOST = 'localhost'
 PORT = 8001
@@ -27,7 +28,7 @@ def montar_pacote(seq, payload, corrompido=False):
 
 MAX_RETRIES = 3
 
-def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
+def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacotes_perder=set()):
     total = len(fragmentos)
     base = 0
     confirmados = set()   # seqs que receberam ACK
@@ -42,12 +43,18 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
             if seq not in confirmados and seq not in pendentes:
                 t = tentativas.get(seq, 0)
                 corrompido = (seq in pacotes_errar) and (t == 0)
+                perdido    = (seq in pacotes_perder) and (t == 0)
                 pkt = montar_pacote(seq, fragmentos[seq], corrompido)
-                sock.send(pkt.encode())
-                pendentes.add(seq)
                 tentativas[seq] = t + 1
-                flag = " [CORROMPIDO]" if corrompido else f" (tentativa {t+1})" if t > 0 else ""
-                print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}'{flag}")
+                pendentes.add(seq)
+                if perdido:
+                    # simula perda: pacote nao e transmitido; timeout dispara retransmissao
+                    print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}' [PERDIDO]")
+                else:
+                    sock.send(pkt.encode())
+                    time.sleep(0.01) #previnindo TCP de juntar pacotes dando um delay p esvaziar o buffer
+                    flag = " [CORROMPIDO]" if corrompido else f" (tentativa {t+1})" if t > 0 else ""
+                    print(f"  [ENVIO] seq={seq} payload='{fragmentos[seq]}'{flag}")
 
         if reenviar:
             reenviar = False
@@ -88,6 +95,7 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set()):
                     if modo == 'go-back-n':
                         # retrocede base e limpa pendentes a partir de nack_seq
                         pendentes = {s for s in pendentes if s < nack_seq}
+                        confirmados = {s for s in confirmados if s < nack_seq} 
                         base = nack_seq
                         reenviar = True
                         break  # descarta respostas posteriores neste recv
@@ -142,13 +150,16 @@ def iniciar_cliente():
             envio_op = input("Opcao: ").strip()
             janela_envio = 1 if envio_op == '2' else janela
 
-            errar = input("Simular erro em quais seqs? (ex: 1,3 ou Enter pra nenhum): ").strip()
+            errar = input("Simular corrupcao em quais seqs? (ex: 1,3 ou Enter pra nenhum): ").strip()
             pacotes_errar = set(int(x) for x in errar.split(',') if x.strip().isdigit()) if errar else set()
+
+            perder = input("Simular perda em quais seqs? (ex: 0,2 ou Enter pra nenhum): ").strip()
+            pacotes_perder = set(int(x) for x in perder.split(',') if x.strip().isdigit()) if perder else set()
 
             sock.send(str(len(fragmentos)).encode())
             sock.recv(1024)
 
-            enviar_com_janela(sock, fragmentos, janela_envio, modo, pacotes_errar)
+            enviar_com_janela(sock, fragmentos, janela_envio, modo, pacotes_errar, pacotes_perder)
 
 if __name__ == "__main__":
     iniciar_cliente()

@@ -30,12 +30,13 @@ def processar_pacote(dados, esperado, modo, buffer_sr):
     print(f"  [PKT] seq={seq} payload='{payload}' cs={'OK' if ok else 'ERRO'} esperado={esperado}")
 
     if not ok:
-        return seq, False
+        return seq, False  # checksum invalido -> NACK
 
     if modo == 'go-back-n':
         if seq == esperado:
-            return seq, True
-        return seq, False
+            return seq, True   # em ordem e valido -> ACK
+        # fora de ordem no GBN: descarta silenciosamente (sem NACK)
+        return seq, None
 
     else:
         buffer_sr[seq] = payload
@@ -89,7 +90,7 @@ def iniciar_servidor():
                             if pkt == "RESET":
                                 print("  [!] Cliente abortou a transmissão por excesso de erros. Resetando buffer.")
                                 recebidos.clear()
-                                break 
+                                break
 
                             if '|' not in pkt:
                                 print(f"  [!] Pacote inválido ignorado: '{pkt}'")
@@ -97,7 +98,7 @@ def iniciar_servidor():
 
                             seq, ok = processar_pacote(pkt, esperado, modo, buffer_sr)
 
-                            if ok:
+                            if ok is True:
                                 if modo == 'go-back-n':
                                     recebidos[seq] = pkt.split('|', 2)[2]
                                     esperado = seq + 1
@@ -109,12 +110,15 @@ def iniciar_servidor():
                                         esperado += 1
 
                                 if len(recebidos) == total:
-                                    if len(recebidos) == total:
-                                        mensagem_final = ''.join(recebidos[i] for i in sorted(recebidos))
-                                        print(f"\n[*] Mensagem completa: '{mensagem_final}'\n")
-                                    else:
-                                        print("\n[!] Transmissão incompleta descartada.\n")       
+                                    mensagem_final = ''.join(recebidos[i] for i in sorted(recebidos))
+                                    print(f"\n[*] Mensagem completa: '{mensagem_final}'\n")
+
+                            elif ok is None:
+                                # GBN: pacote fora de ordem — descarta silenciosamente
+                                print(f"  [GBN] seq={seq} fora de ordem (esperado={esperado}), descartado.")
+
                             else:
+                                # checksum invalido -> NACK (corrupcao)
                                 conn.send(f"NACK|{seq}".encode())
 
                         except socket.timeout:
