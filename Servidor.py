@@ -14,7 +14,7 @@ def calcular_checksum(msg: str) -> str:
         palavra = (dados[i] << 8) + dados[i + 1]
         soma += palavra
         soma = (soma & 0xFFFF) + (soma >> 16)
-    return format(~soma & 0xFFFF, '04x')[:8]
+    return format(~soma & 0xFFFF, '04x')
 
 def processar_pacote(dados, esperado, modo, buffer_sr):
     partes = dados.split('|', 2)
@@ -35,9 +35,9 @@ def processar_pacote(dados, esperado, modo, buffer_sr):
     if modo == 'go-back-n':
         if seq == esperado:
             return seq, True
-        return seq, False  
+        return seq, False
 
-    else: 
+    else:
         buffer_sr[seq] = payload
         return seq, True
 
@@ -50,11 +50,19 @@ def iniciar_servidor():
 
     while True:
         conn, addr = srv.accept()
-        print(f"[+] Conexão de {addr}")
+        print(f"[+] Conexao de {addr}")
 
-        conn.send(str(JANELA_INICIAL).encode())
+        # Handshake: envia janela, recebe max_chars, recebe modo
+        janela_str = input(f"Tamanho da janela para {addr} (1-5, Enter=5): ").strip()
+        janela = int(janela_str) if janela_str.isdigit() and 1 <= int(janela_str) <= 5 else JANELA_INICIAL
+        conn.send(str(janela).encode())
+
+        max_chars = int(conn.recv(1024).decode())
+        conn.send(b"OK")
+        print(f"[*] Limite de caracteres: {max_chars}")
+
         modo = conn.recv(1024).decode()
-        print(f"[*] Modo: {modo} | Janela: {JANELA_INICIAL}\n")
+        print(f"[*] Modo: {modo} | Janela: {janela}\n")
 
         while True:
             try:
@@ -70,7 +78,6 @@ def iniciar_servidor():
                     recebidos = {}
                     buffer_sr = {}
                     esperado = 0
-                    ultimo_ack = -1
 
                     while esperado < total or len(recebidos) < total:
                         try:
@@ -78,6 +85,15 @@ def iniciar_servidor():
                             pkt = conn.recv(1024).decode()
                             if not pkt:
                                 break
+
+                            if pkt == "RESET":
+                                print("  [!] Cliente abortou a transmissão por excesso de erros. Resetando buffer.")
+                                recebidos.clear()
+                                break 
+
+                            if '|' not in pkt:
+                                print(f"  [!] Pacote inválido ignorado: '{pkt}'")
+                                continue
 
                             seq, ok = processar_pacote(pkt, esperado, modo, buffer_sr)
 
@@ -89,12 +105,15 @@ def iniciar_servidor():
                                 else:
                                     recebidos[seq] = buffer_sr.get(seq, '')
                                     conn.send(f"ACK|{seq}".encode())
-                                    # Avança esperado em sequência
                                     while esperado in recebidos:
                                         esperado += 1
 
                                 if len(recebidos) == total:
-                                    break
+                                    if len(recebidos) == total:
+                                        mensagem_final = ''.join(recebidos[i] for i in sorted(recebidos))
+                                        print(f"\n[*] Mensagem completa: '{mensagem_final}'\n")
+                                    else:
+                                        print("\n[!] Transmissão incompleta descartada.\n")       
                             else:
                                 conn.send(f"NACK|{seq}".encode())
 
@@ -103,13 +122,13 @@ def iniciar_servidor():
                             break
 
                     mensagem_final = ''.join(recebidos[i] for i in sorted(recebidos))
-                    print(f"\n[✓] Mensagem completa: '{mensagem_final}'\n")
+                    print(f"\n[*] Mensagem completa: '{mensagem_final}'\n")
 
             except ConnectionResetError:
                 break
 
         conn.close()
-        print(f"[-] Conexão encerrada com {addr}\n")
+        print(f"[-] Conexao encerrada com {addr}\n")
 
 if __name__ == "__main__":
     iniciar_servidor()
