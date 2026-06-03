@@ -1,6 +1,5 @@
 import socket
 import re
-import hashlib
 import time
 
 HOST = 'localhost'

@@ -1,5 +1,4 @@
 import socket
-import hashlib
 
 HOST = 'localhost'
 PORT = 8001
