@@ -112,9 +112,11 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacot
                     if modo == 'go-back-n':
                         # retrocede janela ate o pacote com erro
                         # limpa confirmados tambem — senao o loop pula os seqs que ja estavam confirmados
-                        pendentes   = {s for s in pendentes   if s < nack_seq}
-                        confirmados = {s for s in confirmados if s < nack_seq}
-                        base = nack_seq
+                        nao_confirmados = [s for s in range(nack_seq + 1) if s not in confirmados]
+                        novo_base = min(nao_confirmados) if nao_confirmados else nack_seq
+                        pendentes   = {s for s in pendentes   if s < novo_base}
+                        confirmados = {s for s in confirmados if s < novo_base}
+                        base = novo_base
                         reenviar = True
                         break  # ignora respostas posteriores nesse recv — janela vai resetar
                     else:
@@ -124,6 +126,9 @@ def enviar_com_janela(sock, fragmentos, janela, modo, pacotes_errar=set(), pacot
         except socket.timeout:
             # nenhuma resposta no prazo — limpa pendentes e reenvia a janela inteira
             print(f"  [!] Timeout - reenviando a partir de {base}")
+            nao_confirmados = [s for s in range(total) if s not in confirmados]
+            if nao_confirmados:
+                base = min(nao_confirmados)
             pendentes.clear()
 
     print("[*] Todos os fragmentos entregues.")
